@@ -12,9 +12,9 @@
     <style>
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-        body {
-            background: rgba(0, 0, 0, 0);    /* Fully transparent — OBS renders only the text */
-            background-color: transparent;
+        html, body {
+            background: none !important;
+            background-color: rgba(0,0,0,0) !important;
             margin: 0;
             padding: 0;
             overflow: hidden;
@@ -27,51 +27,38 @@
             align-items: center;
             line-height: 1;
             padding: 20px;
-            /* Smooth transitions when switching between timer / HT */
-            transition: opacity 0.25s ease;
         }
 
-        /* ── Main timer numbers ── */
+        /* ── Main timer numbers — NO shadow, pure clean white ── */
         #main-time {
             font-family: 'JetBrains Mono', monospace;
             font-size: 48px;
             font-weight: 800;
             color: #ffffff;
-            text-shadow:
-                0 0 6px  rgba(0, 0, 0, 0.90),
-                0 0 14px rgba(0, 0, 0, 0.60),
-                2px 2px 4px rgba(0, 0, 0, 0.85);
             letter-spacing: 2px;
-            transition: opacity 0.3s ease;
+            -webkit-text-stroke: 1px rgba(0, 0, 0, 0.4);
         }
 
-        /* ── Stoppage time ── */
+        /* ── Stoppage time — clean yellow, no shadow ── */
         #stoppage-time {
             font-family: 'JetBrains Mono', monospace;
             font-size: 28px;
             font-weight: 700;
             color: #ffeb3b;
-            text-shadow:
-                0 0 5px  rgba(0, 0, 0, 0.85),
-                1px 1px 3px rgba(0, 0, 0, 0.80);
             margin-top: 5px;
             min-height: 30px;
-            transition: opacity 0.3s ease;
+            -webkit-text-stroke: 0.5px rgba(0, 0, 0, 0.3);
         }
 
-        /* ── HT overlay text ── */
+        /* ── HT text — clean white, no shadow ── */
         #ht-text {
             font-family: 'Inter', sans-serif;
             font-size: 48px;
             font-weight: 900;
             color: #ffffff;
             letter-spacing: 8px;
-            text-shadow:
-                0 0 6px  rgba(0, 0, 0, 0.90),
-                0 0 14px rgba(0, 0, 0, 0.60),
-                2px 2px 4px rgba(0, 0, 0, 0.85);
-            display: none;                    /* Shown only in HT mode */
-            transition: opacity 0.3s ease;
+            display: none;
+            -webkit-text-stroke: 1px rgba(0, 0, 0, 0.4);
         }
     </style>
 </head>
@@ -95,9 +82,10 @@
     const $stoppage = document.getElementById('stoppage-time');
     const $ht       = document.getElementById('ht-text');
 
-    /* ── Local tick state ── */
+    /* ── Local state ── */
     let currentState = null;
     let tickInterval = null;
+    let pollInterval = null;
 
     /* =========================================================
        Helpers
@@ -164,40 +152,68 @@
             stopTick();
             render();
         } else {
-            startTick();          // will call render() every 250 ms
-            render();             // immediate first frame
+            startTick();
+            render();
         }
     }
 
     /* =========================================================
-       Realtime subscription
+       Fetch state from DB  (used by both init and polling)
        ========================================================= */
-    sb.channel('viewer-sync')
+    async function fetchState() {
+        try {
+            const { data, error } = await sb
+                .from('timer_state')
+                .select('*')
+                .eq('id', 1)
+                .single();
+
+            if (error) {
+                console.error('[fetch]', error.message);
+                return;
+            }
+            applyState(data);
+        } catch (e) {
+            console.error('[fetch exception]', e);
+        }
+    }
+
+    /* =========================================================
+       Realtime subscription  (instant updates when it works)
+       ========================================================= */
+    const channel = sb.channel('viewer-sync')
       .on('postgres_changes', {
           event:  'UPDATE',
           schema: 'public',
           table:  'timer_state'
       }, payload => {
+          console.log('[realtime] got update');
           applyState(payload.new);
       })
-      .subscribe();
+      .subscribe((status) => {
+          console.log('[realtime status]', status);
+      });
 
     /* =========================================================
-       Init — fetch current state on page load
+       Polling fallback — polls every 2 seconds so the viewer
+       ALWAYS stays in sync, even if Realtime isn't enabled.
+       ========================================================= */
+    function startPolling() {
+        stopPolling();
+        pollInterval = setInterval(fetchState, 2000);
+    }
+
+    function stopPolling() {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+
+    /* =========================================================
+       Init
        ========================================================= */
     async function init() {
-        const { data, error } = await sb
-            .from('timer_state')
-            .select('*')
-            .eq('id', 1)
-            .single();
-
-        if (error) {
-            console.error('[viewer init]', error.message);
-            $main.textContent = 'ERR';
-            return;
-        }
-        applyState(data);
+        await fetchState();     // Get current state immediately
+        startPolling();         // Start background polling as reliable fallback
     }
 
     init();
