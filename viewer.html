@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Football Timer — Viewer</title>
+    <meta name="description" content="Real-time football match timer viewer for OBS Browser Source.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@800;900&family=JetBrains+Mono:wght@700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: rgba(0, 0, 0, 0);    /* Fully transparent — OBS renders only the text */
+            background-color: transparent;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+        }
+
+        #display {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            line-height: 1;
+            padding: 20px;
+            /* Smooth transitions when switching between timer / HT */
+            transition: opacity 0.25s ease;
+        }
+
+        /* ── Main timer numbers ── */
+        #main-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 48px;
+            font-weight: 800;
+            color: #ffffff;
+            text-shadow:
+                0 0 6px  rgba(0, 0, 0, 0.90),
+                0 0 14px rgba(0, 0, 0, 0.60),
+                2px 2px 4px rgba(0, 0, 0, 0.85);
+            letter-spacing: 2px;
+            transition: opacity 0.3s ease;
+        }
+
+        /* ── Stoppage time ── */
+        #stoppage-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 28px;
+            font-weight: 700;
+            color: #ffeb3b;
+            text-shadow:
+                0 0 5px  rgba(0, 0, 0, 0.85),
+                1px 1px 3px rgba(0, 0, 0, 0.80);
+            margin-top: 5px;
+            min-height: 30px;
+            transition: opacity 0.3s ease;
+        }
+
+        /* ── HT overlay text ── */
+        #ht-text {
+            font-family: 'Inter', sans-serif;
+            font-size: 48px;
+            font-weight: 900;
+            color: #ffffff;
+            letter-spacing: 8px;
+            text-shadow:
+                0 0 6px  rgba(0, 0, 0, 0.90),
+                0 0 14px rgba(0, 0, 0, 0.60),
+                2px 2px 4px rgba(0, 0, 0, 0.85);
+            display: none;                    /* Shown only in HT mode */
+            transition: opacity 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <div id="display">
+        <span id="main-time">00:00</span>
+        <span id="stoppage-time"></span>
+        <span id="ht-text">HT</span>
+    </div>
+
+    <script>
+    /* =========================================================
+       Supabase — public anon key (safe for client-side)
+       ========================================================= */
+    const SUPABASE_URL = 'https://skklkteabhgonpqqhhll.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNra2xrdGVhYmhnb25wcXFoaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzI1MzksImV4cCI6MjA5Njk0ODUzOX0.pGH6p5a3K8WMdRlMxIMatfA8gbt0EB9f9c1xVbFA6OQ';
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    /* ── DOM refs ── */
+    const $main     = document.getElementById('main-time');
+    const $stoppage = document.getElementById('stoppage-time');
+    const $ht       = document.getElementById('ht-text');
+
+    /* ── Local tick state ── */
+    let currentState = null;
+    let tickInterval = null;
+
+    /* =========================================================
+       Helpers
+       ========================================================= */
+    function fmt(total) {
+        const m = Math.floor(total / 60);
+        const s = total % 60;
+        return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
+    }
+
+    /** Compute "live" seconds from a state snapshot. */
+    function liveSeconds(st) {
+        if (st.is_running && st.last_started_at) {
+            const elapsed = Math.floor((Date.now() - new Date(st.last_started_at).getTime()) / 1000);
+            return st.seconds + Math.max(0, elapsed);
+        }
+        return st.seconds;
+    }
+
+    /* =========================================================
+       Render
+       ========================================================= */
+    function render() {
+        if (!currentState) return;
+
+        /* ── Half-Time mode ── */
+        if (currentState.display_mode === 'ht') {
+            $main.style.display     = 'none';
+            $stoppage.style.display = 'none';
+            $ht.style.display       = 'inline';
+            return;
+        }
+
+        /* ── Normal timer mode ── */
+        $main.style.display     = 'inline';
+        $stoppage.style.display = 'inline';
+        $ht.style.display       = 'none';
+
+        const cur  = liveSeconds(currentState);
+        const half = currentState.current_half;
+
+        if (half === 1 && cur >= 2700) {           // 45 min
+            $main.textContent     = '45:00';
+            $stoppage.textContent = '+ ' + fmt(cur - 2700);
+        } else if (half === 2 && cur >= 5400) {    // 90 min
+            $main.textContent     = '90:00';
+            $stoppage.textContent = '+ ' + fmt(cur - 5400);
+        } else {
+            $main.textContent     = fmt(cur);
+            $stoppage.textContent = '';
+        }
+    }
+
+    function startTick() { stopTick(); tickInterval = setInterval(render, 250); }
+    function stopTick()  { clearInterval(tickInterval); tickInterval = null; }
+
+    /* =========================================================
+       Apply incoming state
+       ========================================================= */
+    function applyState(st) {
+        currentState = st;
+
+        if (st.display_mode === 'ht' || !st.is_running) {
+            stopTick();
+            render();
+        } else {
+            startTick();          // will call render() every 250 ms
+            render();             // immediate first frame
+        }
+    }
+
+    /* =========================================================
+       Realtime subscription
+       ========================================================= */
+    sb.channel('viewer-sync')
+      .on('postgres_changes', {
+          event:  'UPDATE',
+          schema: 'public',
+          table:  'timer_state'
+      }, payload => {
+          applyState(payload.new);
+      })
+      .subscribe();
+
+    /* =========================================================
+       Init — fetch current state on page load
+       ========================================================= */
+    async function init() {
+        const { data, error } = await sb
+            .from('timer_state')
+            .select('*')
+            .eq('id', 1)
+            .single();
+
+        if (error) {
+            console.error('[viewer init]', error.message);
+            $main.textContent = 'ERR';
+            return;
+        }
+        applyState(data);
+    }
+
+    init();
+    </script>
+</body>
+</html>
