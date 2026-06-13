@@ -121,7 +121,14 @@
     /* ── Fetch state from Supabase REST API ── */
     async function poll() {
         try {
-            const res = await fetch(API, { headers: HEADERS });
+            const res = await fetch(API, {
+                headers: {
+                    ...HEADERS,
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Pragma': 'no-cache'
+                },
+                cache: 'no-store'
+            });
             const arr = await res.json();
             if (arr && arr.length > 0) {
                 const newState = arr[0];
