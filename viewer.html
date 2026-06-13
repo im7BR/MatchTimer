@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@800;900&family=JetBrains+Mono:wght@700;800&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- NO external JS libraries — pure fetch() for maximum reliability -->
     <style>
         * { margin: 0; padding: 0; }
         html { background: none !important; }
@@ -56,36 +56,43 @@
     </div>
 
     <script>
-    const SUPABASE_URL = 'https://skklkteabhgonpqqhhll.supabase.co';
-    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNra2xrdGVhYmhnb25wcXFoaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzI1MzksImV4cCI6MjA5Njk0ODUzOX0.pGH6p5a3K8WMdRlMxIMatfA8gbt0EB9f9c1xVbFA6OQ';
-    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    /*  ── Pure REST polling — no libraries, no WebSockets ──
+        Hits the Supabase REST API every 1 second with raw fetch().
+        This CANNOT fail unless the internet is down.              */
+
+    const API = 'https://skklkteabhgonpqqhhll.supabase.co/rest/v1/timer_state?id=eq.1&select=*';
+    const KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNra2xrdGVhYmhnb25wcXFoaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzI1MzksImV4cCI6MjA5Njk0ODUzOX0.pGH6p5a3K8WMdRlMxIMatfA8gbt0EB9f9c1xVbFA6OQ';
+    const HEADERS = {
+        'apikey': KEY,
+        'Authorization': 'Bearer ' + KEY
+    };
 
     const $main     = document.getElementById('main-time');
     const $stoppage = document.getElementById('stoppage-time');
     const $ht       = document.getElementById('ht-text');
 
-    let currentState = null;
-    let tickInterval = null;
-    let pollInterval = null;
+    let state = null;
+    let tickId = null;
 
-    function fmt(total) {
-        const m = Math.floor(total / 60);
-        const s = total % 60;
+    function fmt(t) {
+        const m = Math.floor(t / 60);
+        const s = t % 60;
         return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
     }
 
-    function liveSeconds(st) {
-        if (st.is_running && st.last_started_at) {
-            const elapsed = Math.floor((Date.now() - new Date(st.last_started_at).getTime()) / 1000);
-            return st.seconds + Math.max(0, elapsed);
+    function liveSeconds() {
+        if (!state) return 0;
+        if (state.is_running && state.last_started_at) {
+            const elapsed = Math.floor((Date.now() - new Date(state.last_started_at).getTime()) / 1000);
+            return state.seconds + Math.max(0, elapsed);
         }
-        return st.seconds;
+        return state.seconds;
     }
 
     function render() {
-        if (!currentState) return;
+        if (!state) return;
 
-        if (currentState.display_mode === 'ht') {
+        if (state.display_mode === 'ht') {
             $main.style.display     = 'none';
             $stoppage.style.display = 'none';
             $ht.style.display       = 'inline';
@@ -96,8 +103,8 @@
         $stoppage.style.display = 'inline';
         $ht.style.display       = 'none';
 
-        const cur  = liveSeconds(currentState);
-        const half = currentState.current_half;
+        const cur  = liveSeconds();
+        const half = state.current_half;
 
         if (half === 1 && cur >= 2700) {
             $main.textContent     = '45:00';
@@ -111,43 +118,37 @@
         }
     }
 
-    function startTick() { stopTick(); tickInterval = setInterval(render, 250); }
-    function stopTick()  { clearInterval(tickInterval); tickInterval = null; }
+    /* ── Fetch state from Supabase REST API ── */
+    async function poll() {
+        try {
+            const res = await fetch(API, { headers: HEADERS });
+            const arr = await res.json();
+            if (arr && arr.length > 0) {
+                const newState = arr[0];
 
-    function applyState(st) {
-        currentState = st;
-        if (st.display_mode === 'ht' || !st.is_running) {
-            stopTick();
-            render();
-        } else {
-            startTick();
-            render();
+                /* Detect state change — restart/stop local tick accordingly */
+                const wasRunning = state ? state.is_running : false;
+                const nowRunning = newState.is_running;
+
+                state = newState;
+
+                if (nowRunning && !tickId) {
+                    tickId = setInterval(render, 250);
+                } else if (!nowRunning && tickId) {
+                    clearInterval(tickId);
+                    tickId = null;
+                }
+
+                render();
+            }
+        } catch (e) {
+            /* Network error — just skip this cycle */
         }
     }
 
-    async function fetchState() {
-        try {
-            const { data, error } = await sb
-                .from('timer_state')
-                .select('*')
-                .eq('id', 1)
-                .single();
-            if (!error && data) applyState(data);
-        } catch (e) { /* silent */ }
-    }
-
-    /* Realtime subscription */
-    sb.channel('viewer-sync')
-      .on('postgres_changes', {
-          event: 'UPDATE', schema: 'public', table: 'timer_state'
-      }, payload => { applyState(payload.new); })
-      .subscribe();
-
-    /* Polling fallback — every 1.5 seconds */
-    pollInterval = setInterval(fetchState, 1500);
-
-    /* Init */
-    fetchState();
+    /* ── Start polling immediately, repeat every 1 second ── */
+    poll();
+    setInterval(poll, 1000);
     </script>
 </body>
 </html>
