@@ -7,7 +7,6 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@800;900&family=JetBrains+Mono:wght@700;800&display=swap" rel="stylesheet">
-    <!-- NO external JS libraries — pure fetch() for maximum reliability -->
     <style>
         * { margin: 0; padding: 0; }
         html { background: none !important; }
@@ -56,34 +55,31 @@
     </div>
 
     <script>
-    /*  ── Pure REST polling — no libraries, no WebSockets ──
-        Hits the Supabase REST API every 1 second with raw fetch().
-        This CANNOT fail unless the internet is down.              */
+    /*  Pure REST polling — no libraries, no WebSockets.
+        Uses requestAnimationFrame for smooth counting (OBS-safe). */
 
-    const API = 'https://skklkteabhgonpqqhhll.supabase.co/rest/v1/timer_state?id=eq.1&select=*';
-    const KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNra2xrdGVhYmhnb25wcXFoaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzI1MzksImV4cCI6MjA5Njk0ODUzOX0.pGH6p5a3K8WMdRlMxIMatfA8gbt0EB9f9c1xVbFA6OQ';
-    const HEADERS = {
-        'apikey': KEY,
-        'Authorization': 'Bearer ' + KEY
-    };
+    var API = 'https://skklkteabhgonpqqhhll.supabase.co/rest/v1/timer_state?id=eq.1&select=*';
+    var KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNra2xrdGVhYmhnb25wcXFoaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzI1MzksImV4cCI6MjA5Njk0ODUzOX0.pGH6p5a3K8WMdRlMxIMatfA8gbt0EB9f9c1xVbFA6OQ';
 
-    const $main     = document.getElementById('main-time');
-    const $stoppage = document.getElementById('stoppage-time');
-    const $ht       = document.getElementById('ht-text');
+    var $main     = document.getElementById('main-time');
+    var $stoppage = document.getElementById('stoppage-time');
+    var $ht       = document.getElementById('ht-text');
 
-    let state = null;
-    let tickId = null;
+    var state     = null;
+    var lastSec   = -1;  // track last displayed second to avoid unnecessary DOM writes
 
     function fmt(t) {
-        const m = Math.floor(t / 60);
-        const s = t % 60;
+        var m = Math.floor(t / 60);
+        var s = t % 60;
         return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
     }
 
     function liveSeconds() {
         if (!state) return 0;
         if (state.is_running && state.last_started_at) {
-            const elapsed = Math.floor((Date.now() - new Date(state.last_started_at).getTime()) / 1000);
+            var started = new Date(state.last_started_at).getTime();
+            if (isNaN(started)) return state.seconds;   // safety: bad date
+            var elapsed = Math.floor((Date.now() - started) / 1000);
             return state.seconds + Math.max(0, elapsed);
         }
         return state.seconds;
@@ -92,10 +88,12 @@
     function render() {
         if (!state) return;
 
+        /* HT mode */
         if (state.display_mode === 'ht') {
             $main.style.display     = 'none';
             $stoppage.style.display = 'none';
             $ht.style.display       = 'inline';
+            lastSec = -1;
             return;
         }
 
@@ -103,8 +101,12 @@
         $stoppage.style.display = 'inline';
         $ht.style.display       = 'none';
 
-        const cur  = liveSeconds();
-        const half = state.current_half;
+        var cur  = liveSeconds();
+        var half = state.current_half;
+
+        /* Only touch the DOM when the second actually changes */
+        if (cur === lastSec) return;
+        lastSec = cur;
 
         if (half === 1 && cur >= 2700) {
             $main.textContent     = '45:00';
@@ -118,42 +120,36 @@
         }
     }
 
-    /* ── Fetch state from Supabase REST API ── */
-    async function poll() {
-        try {
-            const res = await fetch(API, {
-                headers: {
-                    ...HEADERS,
-                    'Cache-Control': 'no-cache, no-store, must-revalidate',
-                    'Pragma': 'no-cache'
-                },
-                cache: 'no-store'
-            });
-            const arr = await res.json();
-            if (arr && arr.length > 0) {
-                const newState = arr[0];
+    /* ── Animation loop — runs continuously, OBS-safe ── */
+    function tick() {
+        render();
+        requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
 
-                /* Detect state change — restart/stop local tick accordingly */
-                const wasRunning = state ? state.is_running : false;
-                const nowRunning = newState.is_running;
-
-                state = newState;
-
-                if (nowRunning && !tickId) {
-                    tickId = setInterval(render, 250);
-                } else if (!nowRunning && tickId) {
-                    clearInterval(tickId);
-                    tickId = null;
-                }
-
-                render();
+    /* ── Poll Supabase every 1 second ── */
+    function poll() {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', API, true);
+        xhr.setRequestHeader('apikey', KEY);
+        xhr.setRequestHeader('Authorization', 'Bearer ' + KEY);
+        xhr.setRequestHeader('Cache-Control', 'no-cache, no-store');
+        xhr.setRequestHeader('Pragma', 'no-cache');
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                try {
+                    var arr = JSON.parse(xhr.responseText);
+                    if (arr && arr.length > 0) {
+                        state = arr[0];
+                        lastSec = -1;   // force re-render on new data
+                    }
+                } catch(e) {}
             }
-        } catch (e) {
-            /* Network error — just skip this cycle */
-        }
+        };
+        xhr.send();
     }
 
-    /* ── Start polling immediately, repeat every 1 second ── */
+    /* Start polling immediately, then every 1 second */
     poll();
     setInterval(poll, 1000);
     </script>
