@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Morocco Score — Overlay</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@700;800&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; }
+        html { background: none !important; }
+        body { background: none !important; overflow: hidden; }
+
+        #score {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 64px;
+            font-weight: 800;
+            color: #ffffff;
+            text-align: center;
+            padding: 10px 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="score">0</div>
+
+    <script>
+    var API = 'https://skklkteabhgonpqqhhll.supabase.co/rest/v1/timer_state?id=eq.1&select=morocco_score';
+    var KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNra2xrdGVhYmhnb25wcXFoaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzI1MzksImV4cCI6MjA5Njk0ODUzOX0.pGH6p5a3K8WMdRlMxIMatfA8gbt0EB9f9c1xVbFA6OQ';
+    var el = document.getElementById('score');
+    var lastVal = -1;
+
+    function poll() {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', API, true);
+        xhr.setRequestHeader('apikey', KEY);
+        xhr.setRequestHeader('Authorization', 'Bearer ' + KEY);
+        xhr.setRequestHeader('Cache-Control', 'no-cache, no-store');
+        xhr.setRequestHeader('Pragma', 'no-cache');
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4 && xhr.status === 200) {
+                try {
+                    var arr = JSON.parse(xhr.responseText);
+                    if (arr && arr.length > 0) {
+                        var val = arr[0].morocco_score;
+                        if (val === null || val === undefined) val = 0;
+                        if (val !== lastVal) {
+                            el.textContent = val;
+                            lastVal = val;
+                        }
+                    }
+                } catch(e) {}
+            }
+        };
+        xhr.send();
+    }
+
+    poll();
+    setInterval(poll, 1000);
+    </script>
+</body>
+</html>

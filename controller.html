@@ -261,12 +261,78 @@
             box-shadow: 0 0 0 3px rgba(120, 140, 255, 0.10);
         }
 
+        /* ── Score Sections ── */
+        .score-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .score-label {
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            white-space: nowrap;
+            flex: 0 0 auto;
+            min-width: 130px;
+        }
+
+        .score-label.morocco { color: #e05050; }
+        .score-label.other   { color: #50a0e0; }
+
+        .score-input {
+            width: 80px;
+            padding: 14px 10px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.06);
+            color: #fff;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 28px;
+            font-weight: 800;
+            text-align: center;
+            outline: none;
+            transition: border-color 0.25s, box-shadow 0.25s;
+        }
+
+        .score-input:focus {
+            border-color: rgba(120, 140, 255, 0.45);
+            box-shadow: 0 0 0 3px rgba(120, 140, 255, 0.10);
+        }
+
+        .score-display {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 36px;
+            font-weight: 800;
+            padding: 0 16px;
+            min-width: 60px;
+            text-align: center;
+        }
+
+        .score-display.morocco { color: #e05050; }
+        .score-display.other   { color: #50a0e0; }
+
+        .btn-score {
+            flex: 0 0 auto;
+            padding: 14px 28px;
+        }
+
+        .btn-morocco { background: linear-gradient(135deg, #b71c1c 0%, #e53935 100%); box-shadow: 0 4px 20px rgba(229, 57, 53, 0.20); }
+        .btn-other   { background: linear-gradient(135deg, #0d47a1 0%, #1e88e5 100%); box-shadow: 0 4px 20px rgba(30, 136, 229, 0.20); }
+
+        .score-row-divider {
+            height: 1px;
+            background: rgba(255,255,255,0.06);
+            margin: 4px 0;
+        }
+
         /* ── Footer link ── */
         .footer {
             text-align: center;
             font-size: 12px;
             color: rgba(255,255,255,0.30);
-            line-height: 1.6;
+            line-height: 1.8;
         }
 
         .footer a {
@@ -284,6 +350,7 @@
             .stoppage-value { font-size: 24px; min-height: 30px; }
             .btn { padding: 18px 8px; font-size: 15px; }
             .manual-input { font-size: 20px; padding: 14px 10px; }
+            .score-label { min-width: 100px; font-size: 12px; }
         }
     </style>
 </head>
@@ -329,10 +396,31 @@
             </div>
         </section>
 
+        <!-- Score Controls -->
+        <section class="card" aria-label="Score controls">
+            <div class="btn-grid">
+                <div class="score-section">
+                    <span class="score-label morocco">🇲🇦 Morocco</span>
+                    <span class="score-display morocco" id="morocco-display">0</span>
+                    <input type="number" class="score-input" id="morocco-input" value="0" min="0" max="99">
+                    <button class="btn btn-score btn-morocco" onclick="handleScore('morocco')">Send</button>
+                </div>
+                <div class="score-row-divider"></div>
+                <div class="score-section">
+                    <span class="score-label other">⚽ Other Team</span>
+                    <span class="score-display other" id="other-display">0</span>
+                    <input type="number" class="score-input" id="other-input" value="0" min="0" max="99">
+                    <button class="btn btn-score btn-other" onclick="handleScore('other')">Send</button>
+                </div>
+            </div>
+        </section>
+
         <!-- Footer -->
         <footer class="footer">
-            Viewer URL for OBS:&ensp;<a href="viewer.html" target="_blank" rel="noopener">viewer.html</a><br>
-            Share the full hosted link with your friend as a Browser Source.
+            <strong>OBS Overlay URLs:</strong><br>
+            Timer:&ensp;<a href="viewer.html" target="_blank" rel="noopener">viewer.html</a><br>
+            Morocco Score:&ensp;<a href="score-morocco.html" target="_blank" rel="noopener">score-morocco.html</a><br>
+            Other Score:&ensp;<a href="score-other.html" target="_blank" rel="noopener">score-other.html</a>
         </footer>
 
     </div>
@@ -352,6 +440,8 @@
     let displayMode    = 'timer';   // 'timer' | 'ht'
     let lastStartedAt  = null;      // ISO-8601 string when running
     let tickInterval   = null;
+    let moroccoScore   = 0;
+    let otherScore     = 0;
 
     /* ── DOM refs ── */
     const $timer     = document.getElementById('timer-value');
@@ -504,6 +594,30 @@
     }
 
     /* =========================================================
+       Score handlers
+       ========================================================= */
+    async function handleScore(team) {
+        const inputEl = document.getElementById(team === 'morocco' ? 'morocco-input' : 'other-input');
+        const val = parseInt(inputEl.value, 10);
+        if (isNaN(val) || val < 0) return alert('Enter a valid number.');
+
+        if (team === 'morocco') {
+            moroccoScore = val;
+            document.getElementById('morocco-display').textContent = val;
+        } else {
+            otherScore = val;
+            document.getElementById('other-display').textContent = val;
+        }
+
+        const update = team === 'morocco'
+            ? { morocco_score: val, updated_at: new Date().toISOString() }
+            : { other_score: val, updated_at: new Date().toISOString() };
+
+        const { error } = await sb.from('timer_state').update(update).eq('id', 1);
+        if (error) console.error('[score push]', error.message);
+    }
+
+    /* =========================================================
        Init — fetch current state from DB
        ========================================================= */
     async function init() {
@@ -525,6 +639,13 @@
         currentHalf   = data.current_half    ?? 1;
         displayMode   = data.display_mode    ?? 'timer';
         lastStartedAt = data.last_started_at ?? null;
+        moroccoScore  = data.morocco_score   ?? 0;
+        otherScore    = data.other_score     ?? 0;
+
+        document.getElementById('morocco-display').textContent = moroccoScore;
+        document.getElementById('morocco-input').value = moroccoScore;
+        document.getElementById('other-display').textContent = otherScore;
+        document.getElementById('other-input').value = otherScore;
 
         if (isRunning) startTick();
         render();
