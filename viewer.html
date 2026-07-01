@@ -54,23 +54,24 @@
         <span id="ht-text">HT</span>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
-    /*  ── Viewer v6 — Clock-independent local counting ──
-        Does NOT depend on the controller's clock matching
-        the viewer's clock. Counts locally using Date.now()
-        relative to when this viewer detected the "running" state. */
+    /*  ── Viewer v7 — Supabase Realtime (no polling) ──
+        Uses a single WebSocket connection instead of 1-req/sec polling.
+        Still counts locally using Date.now() for smooth OBS rendering. */
 
-    var API = 'https://skklkteabhgonpqqhhll.supabase.co/rest/v1/timer_state?id=eq.1&select=*';
-    var KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNra2xrdGVhYmhnb25wcXFoaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzI1MzksImV4cCI6MjA5Njk0ODUzOX0.pGH6p5a3K8WMdRlMxIMatfA8gbt0EB9f9c1xVbFA6OQ';
+    var SUPABASE_URL = 'https://skklkteabhgonpqqhhll.supabase.co';
+    var SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNra2xrdGVhYmhnb25wcXFoaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzNzI1MzksImV4cCI6MjA5Njk0ODUzOX0.pGH6p5a3K8WMdRlMxIMatfA8gbt0EB9f9c1xVbFA6OQ';
+    var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     var $main     = document.getElementById('main-time');
     var $stoppage = document.getElementById('stoppage-time');
     var $ht       = document.getElementById('ht-text');
 
     var state          = null;
-    var localStartTime = null;   // Date.now() when WE detected is_running
-    var localBase      = 0;      // seconds value when WE detected is_running
-    var wasRunning     = false;  // previous running state
+    var localStartTime = null;
+    var localBase      = 0;
+    var wasRunning     = false;
     var lastSec        = -1;
 
     function fmt(t) {
@@ -84,9 +85,6 @@
 
         if (state.is_running) {
             if (localStartTime === null) {
-                /* First time we see is_running = true.
-                   Try to compute how many seconds have already elapsed
-                   on the server, but only if the clocks seem reasonable. */
                 localStartTime = Date.now();
                 localBase = state.seconds;
 
@@ -94,9 +92,6 @@
                     var serverStart = new Date(state.last_started_at).getTime();
                     if (!isNaN(serverStart)) {
                         var serverElapsed = Math.floor((Date.now() - serverStart) / 1000);
-                        /* Only use server elapsed if it looks sane (0 to 24 hours).
-                           If the viewer's clock is behind, serverElapsed will be
-                           negative and we just start from state.seconds instead. */
                         if (serverElapsed >= 0 && serverElapsed < 86400) {
                             localBase = state.seconds + serverElapsed;
                         }
@@ -104,12 +99,10 @@
                 }
             }
 
-            /* Count using LOCAL elapsed time — immune to clock skew */
             var localElapsed = Math.floor((Date.now() - localStartTime) / 1000);
             return localBase + localElapsed;
         }
 
-        /* Not running — reset local tracking and show static value */
         localStartTime = null;
         localBase = 0;
         return state.seconds;
@@ -148,6 +141,17 @@
         }
     }
 
+    /* ── Apply new state from DB ── */
+    function applyState(newState) {
+        var nowRunning = newState.is_running;
+        if (nowRunning && !wasRunning) {
+            localStartTime = null;
+        }
+        state = newState;
+        wasRunning = nowRunning;
+        lastSec = -1;
+    }
+
     /* ── Continuous render loop (requestAnimationFrame = OBS-safe) ── */
     function tick() {
         render();
@@ -155,39 +159,31 @@
     }
     requestAnimationFrame(tick);
 
-    /* ── Poll Supabase every 1 second via XHR ── */
-    function poll() {
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', API, true);
-        xhr.setRequestHeader('apikey', KEY);
-        xhr.setRequestHeader('Authorization', 'Bearer ' + KEY);
-        xhr.setRequestHeader('Cache-Control', 'no-cache, no-store');
-        xhr.setRequestHeader('Pragma', 'no-cache');
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState === 4 && xhr.status === 200) {
-                try {
-                    var arr = JSON.parse(xhr.responseText);
-                    if (arr && arr.length > 0) {
-                        var newState = arr[0];
-                        var nowRunning = newState.is_running;
+    /* ── Init: one fetch + Realtime subscription ── */
+    async function init() {
+        // Single initial fetch
+        var { data, error } = await sb
+            .from('timer_state')
+            .select('*')
+            .eq('id', 1)
+            .single();
 
-                        /* Detect START transition → reset local counter */
-                        if (nowRunning && !wasRunning) {
-                            localStartTime = null;  // will be re-initialized in liveSeconds()
-                        }
+        if (!error && data) {
+            applyState(data);
+        }
 
-                        state = newState;
-                        wasRunning = nowRunning;
-                        lastSec = -1;   // force re-render
-                    }
-                } catch(e) {}
-            }
-        };
-        xhr.send();
+        // Subscribe to realtime changes — no more polling
+        sb.channel('viewer-timer')
+          .on('postgres_changes',
+              { event: 'UPDATE', schema: 'public', table: 'timer_state', filter: 'id=eq.1' },
+              function(payload) {
+                  applyState(payload.new);
+              }
+          )
+          .subscribe();
     }
 
-    poll();
-    setInterval(poll, 1000);
+    init();
     </script>
 </body>
 </html>
